@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DRM Video Player with Salt from XML</title>
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.12.4/dist/shaka-player.compiled.min.js"></script>
+
+  <script>
+    let player;
+
+    async function initApp() {
+      shaka.polyfill.installAll();
+
+      if (!shaka.Player.isBrowserSupported()) {
+        console.error('Browser not supported!');
+        return;
+      }
+
+      document.getElementById('loadButton').addEventListener('click', async () => {
+        const manifestXML = document.getElementById("manifest").value;
+        const password = document.getElementById("pass").value;
+
+        if (!manifestXML || !password) {
+          alert("Manifest and password are required.");
+          return;
+        }
+
+        try {
+          // 1. Extract salt from XML
+          const saltHex = await extractSaltFromXML(manifestXML);
+          const salt = hexToBuffer(saltHex);
+          const enc = new TextEncoder();
+          const passBuffer = enc.encode(password);
+
+          // 2. Derive key using PBKDF2
+          const keyMaterial = await window.crypto.subtle.importKey(
+            "raw",
+            passBuffer,
+            "PBKDF2",
+            false,
+            ["deriveBits"]
+          );
+
+          const keyBits = await window.crypto.subtle.deriveBits({
+            name: "PBKDF2",
+            salt: salt,
+            iterations: 1000,
+            hash: "SHA-1"
+          }, keyMaterial, 128);
+
+          const keyHex = bufferToHex(keyBits);
+
+          // 3. Generate KID from SHA-1 hash of key
+          const kidHash = await window.crypto.subtle.digest("SHA-1", keyBits);
+          const kidBytes = new Uint8Array(kidHash).slice(0, 16);
+          const kidHex = bufferToHex(kidBytes);
+
+          console.log("Salt:", saltHex);
+          console.log("Derived KEY:", keyHex);
+          console.log("Derived KID:", kidHex);
+
+          // 4. Load video with derived keys
+          const timestamp = Date.now(); // cache-busting
+          const mpdUrl = manifestXML.replace(".xml", ".mpd") + `?t=${timestamp}`;
+          await loadVideo(mpdUrl, kidHex, keyHex);
+        } catch (err) {
+          console.error("Failed to load or parse:", err);
+        }
+      });
+    }
+
+    async function extractSaltFromXML(xmlUrl) {
+      const response = await fetch(xmlUrl);
+      const text = await response.text();
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(text, "application/xml");
+
+      const saltElement = xmlDoc.querySelector("Salt");
+      if (!saltElement) {
+        throw new Error("No <Salt> element found in XML");
+      }
+
+      return saltElement.getAttribute("value");
+    }
+
+    function initPlayer(videoElement) {
+      const player = new shaka.Player(videoElement);
+      player.addEventListener("error", onErrorEvent);
+      window.player = player;
+      return player;
+    }
+
+    async function loadVideo(manifest, kid, key) {
+      try {
+        // Destroy old player if exists
+        if (player) {
+          await player.destroy();
+        }
+
+        // Recreate the video element to purge buffers
+        const oldVideo = document.getElementById("video");
+        const newVideo = oldVideo.cloneNode(true);
+        oldVideo.parentNode.replaceChild(newVideo, oldVideo);
+
+        // Clear variant selector
+        document.querySelector('.variantSelector').innerHTML = '';
+
+        // Init new player on new video element
+        player = initPlayer(newVideo);
+
+        // Configure with new key
+        player.configure({
+          drm: {
+            clearKeys: {
+              [kid]: key
+            }
+          },
+          abr: {
+            enabled: false
+          }
+        });
+
+        await player.load(manifest);
+        console.log("Video loaded!");
+        initSelector(player);
+      } catch (error) {
+        onError(error);
+      }
+    }
+
+   
+    
+    function initSelector(player) {
+  const select = document.querySelector('.variantSelector');
+
+  const variants = player.getVariantTracks();
+  const current = player.getVariantTracks().find(v => v.active);
+  
+  select.innerHTML = variants
+    .map((variant, index) => {
+      const bandwidthKb = (variant.videoBandwidth / 1024).toFixed(0);
+      const selected = variant.id === current.id ? "selected" : "";
+      return `<option value="${index}" ${selected}>${bandwidthKb}</option>`;
+    })
+    .join('');
+
+  select.addEventListener('change', (event) => {
+    const selectedVariant = variants[event.target.value];
+    player.selectVariantTrack(selectedVariant, true, 3);
+  });
+}
+
+
+    function onErrorEvent(event) {
+      onError(event.detail);
+    }
+
+    function onError(error) {
+      console.error('Error code', error.code, 'object', error);
+    }
+
+    function bufferToHex(buffer) {
+      const byteArray = new Uint8Array(buffer);
+      return Array.from(byteArray).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    function hexToBuffer(hex) {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+      }
+      return bytes;
+    }
+
+    document.addEventListener("DOMContentLoaded", initApp);
+  </script>
+</head>
+<body>
+  <div>
+    <label>Manifest (XML URL): </label>
+    <input type="text" id="manifest" placeholder="dir/example_drm.xml">
+    <label>Password: </label>
+    <input type="password" id="pass">
+    <button type="button" id="loadButton">Load</button>
+  </div>
+  <div>
+    <label>Select Bitrate:</label>
+    <select class="variantSelector"></select>
+    <label> Kb </label>
+  </div>
+  <video id="video" height="720" width="1280" controls autoplay></video>
+</body>
+</html>
+

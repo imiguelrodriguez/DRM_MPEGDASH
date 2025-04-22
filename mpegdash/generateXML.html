@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DRM-XML generator</title>
+</head>
+<body>
+  <h1>Generate the XML file based on password using PBKDF2</h1>
+  <div>
+    <label>XML File name: </label>
+    <input type="text" placeholder="video_drm.xml" id="file" name="file"><br><br>
+
+    <label>Password: </label>
+    <input type="password" id="pass" name="pass"><br><br>
+
+    <button type="button" id="loadButton" name="loadButton">Generate file</button>
+  </div>
+
+  <script>
+    document.getElementById("loadButton").addEventListener("click", async () => {
+      const password = document.getElementById("pass").value;
+      const fileName = document.getElementById("file").value || "drm.xml";
+
+      if (!password) {
+        alert("Please enter a password.");
+        return;
+      }
+
+      const enc = new TextEncoder();
+      const passBuffer = enc.encode(password);
+
+      // Generate a random 16-byte salt
+      const saltArray = new Uint8Array(16);
+      crypto.getRandomValues(saltArray);
+      const salt = saltArray;
+      const saltHex = bufferToHex(saltArray);
+      
+      // Derive key using PBKDF2
+      const keyMaterial = await window.crypto.subtle.importKey(
+        "raw",
+        passBuffer,
+        "PBKDF2",
+        false,
+        ["deriveBits", "deriveKey"]
+      );
+
+      const keyBits = await window.crypto.subtle.deriveBits({
+        name: "PBKDF2",
+        salt: salt,
+        iterations: 1000,
+        hash: "SHA-1"
+      }, keyMaterial, 128);
+
+      const keyHex = bufferToHex(keyBits);
+      const keyFormatted = "0x" + keyHex;
+
+      // Generate KID as SHA-1 hash of the key, take first 16 bytes
+      const kidHash = await window.crypto.subtle.digest("SHA-1", keyBits);
+      const kidBytes = new Uint8Array(kidHash).slice(0, 16);
+      const kidHex = bufferToHex(kidBytes);
+      const kidFormatted = "0x" + kidHex;
+
+      // Generate a random 8-byte IV (64 bits)
+      const ivArray = new Uint8Array(8);
+      crypto.getRandomValues(ivArray);
+      const ivHex = bufferToHex(ivArray);
+      const ivFormatted = "0x" + ivHex;
+
+      // Build XML
+      const xmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<GPACDRM type="CENC AES-CTR">
+  <Salt value="${saltHex}"/>
+  <DRMInfo type="pssh" version="1">
+    <BS ID128="1077efecc0b24d02ace33c1e52e2fb4b"/>
+    <BS bits="32" value="1"/>
+    <BS ID128="${kidHex}"/>
+  </DRMInfo>
+  <CrypTrack IV_size="8" first_IV="${ivFormatted}" isEncrypted="1" saiSavedBox="senc" trackID="1">
+    <key KID="${kidFormatted}" value="${keyFormatted}"/>
+  </CrypTrack>
+</GPACDRM>`;
+
+      // Save file using File System Access API if available
+      if ('showSaveFilePicker' in window) {
+        try {
+          const options = {
+            suggestedName: fileName.endsWith(".xml") ? fileName : fileName + ".xml",
+            types: [{
+              description: 'XML Files',
+              accept: { 'application/xml': ['.xml'] }
+            }]
+          };
+          const handle = await window.showSaveFilePicker(options);
+          const writable = await handle.createWritable();
+          await writable.write(xmlContent);
+          await writable.close();
+        } catch (err) {
+          console.error("Save cancelled or failed:", err);
+        }
+      } else {
+        // Fallback to automatic download
+        const blob = new Blob([xmlContent], { type: "application/xml" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName.endsWith(".xml") ? fileName : fileName + ".xml";
+        link.click();
+      }
+    });
+
+    // Convert ArrayBuffer to hex string
+    function bufferToHex(buffer) {
+      const byteArray = new Uint8Array(buffer);
+      return Array.from(byteArray).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+  </script>
+</body>
+</html>
+
