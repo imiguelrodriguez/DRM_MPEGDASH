@@ -13,6 +13,7 @@ This project demonstrates how to implement **DRM (Digital Rights Management)** f
 - An **HTTPS server**  
 
 ## Directory structure
+```
 DRM_MPEGDASH/
 ├── README.md       
 ├── DRM_Multimedia_IgnacioMiguelRodríguez.pdf # Main documentation         
@@ -36,6 +37,7 @@ DRM_MPEGDASH/
     ├── pbkdf2.js         # PBKDF2 function
     ├── server.pem        # HTTPS server's certificate
     └── server.py         # HTTPS server
+```
 ## How to proceed  
 ### Encrypting streams and generating XML files
 Note that these steps have already been performed. Only follow them if you want to change the password for encryption.
